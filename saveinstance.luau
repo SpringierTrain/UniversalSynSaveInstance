@@ -714,7 +714,7 @@ XML_Descriptors = {
 
 			sequence ..= keypoint.Time .. " " .. (valueFormatter and valueFormatter(Value) or __NORMALIZE_RANGE(Value) .. " " .. __NORMALIZE_RANGE(
 				keypoint.Envelope
-			) .. " ") -- ? Trailing whitespace is only needed for lune compatibility
+				) .. " ") -- ? Trailing whitespace is only needed for lune compatibility
 		end
 
 		return sequence
@@ -769,7 +769,7 @@ XML_Descriptors = {
 			.. "</R21><R22>"
 			.. R22
 			.. "</R22>",
-			"CoordinateFrame"
+		"CoordinateFrame"
 	end,
 	Color3 = function(raw) -- Each element is a <float>
 		return "<R>" .. raw.R .. "</R><G>" .. raw.G .. "</G><B>" .. raw.B .. "</B>" -- ? It is recommended that Color3 is encoded with elements instead of text.
@@ -822,24 +822,24 @@ XML_Descriptors = {
 		return "<faces>" .. __BIT(raw.Right, raw.Top, raw.Back, raw.Left, raw.Bottom, raw.Front) .. "</faces>"
 	end,
 	Font = 636 < CLIENT_VERSION
-			and function(raw)
-				-- TODO (OPTIONAL ELEMENT): Figure out how to determine (ContentId) <CachedFaceId><url>rbxasset://fonts/GothamSSm-Medium.otf</url></CachedFaceId>
+		and function(raw)
+			-- TODO (OPTIONAL ELEMENT): Figure out how to determine (ContentId) <CachedFaceId><url>rbxasset://fonts/GothamSSm-Medium.otf</url></CachedFaceId>
 				--[[
 		? game:GetService("TextService"):GetFontMemoryData()
 		? rbxasset://fonts/families/{Enum.Font.BuilderSans.Name}.json
 		]]
 
-				local ok_w, weight = pcall(index, raw, "Weight")
-				local ok_s, style = pcall(index, raw, "Style")
+			local ok_w, weight = pcall(index, raw, "Weight")
+			local ok_s, style = pcall(index, raw, "Style")
 
-				return "<Family>"
-					.. XML_Descriptors.ContentId(raw.Family)
-					.. "</Family><Weight>"
-					.. (ok_w and XML_Descriptors.__ENUM(weight) or "")
-					.. "</Weight><Style>"
-					.. (ok_s and style.Name or "") -- Weird but this field accepts .Name of enum instead..
-					.. "</Style>"
-			end
+			return "<Family>"
+			.. XML_Descriptors.ContentId(raw.Family)
+			.. "</Family><Weight>"
+			.. (ok_w and XML_Descriptors.__ENUM(weight) or "")
+			.. "</Weight><Style>"
+			.. (ok_s and style.Name or "") -- Weird but this field accepts .Name of enum instead..
+			.. "</Style>"
+		end
 		or function(raw)
 			local FontString = tostring(raw) -- TODO: Temporary fix
 
@@ -847,12 +847,12 @@ XML_Descriptors = {
 			local EmptyStyle = string_find(FontString, "Style =  }")
 
 			return "<Family>"
-				.. XML_Descriptors.ContentId(raw.Family)
-				.. "</Family><Weight>"
-				.. (EmptyWeight and "" or XML_Descriptors.__ENUM(raw.Weight))
-				.. "</Weight><Style>"
-				.. (EmptyStyle and "" or raw.Style.Name) -- Weird but this field accepts .Name of enum instead..
-				.. "</Style>"
+			.. XML_Descriptors.ContentId(raw.Family)
+			.. "</Family><Weight>"
+			.. (EmptyWeight and "" or XML_Descriptors.__ENUM(raw.Weight))
+			.. "</Weight><Style>"
+			.. (EmptyStyle and "" or raw.Style.Name) -- Weird but this field accepts .Name of enum instead..
+			.. "</Style>"
 		end,
 	NumberRange = function(raw) -- tostring(raw) also works
 		-- The value is the text content, formatted as a space-separated list of floating point numbers.
@@ -892,7 +892,7 @@ XML_Descriptors = {
 		local CustomPhysics = "<CustomPhysics>" .. XML_Descriptors.bool(raw and true or false) .. "</CustomPhysics>"
 
 		return raw
-				and CustomPhysics .. "<Density>" .. raw.Density .. "</Density><Friction>" .. raw.Friction .. "</Friction><Elasticity>" .. raw.Elasticity .. "</Elasticity><FrictionWeight>" .. raw.FrictionWeight .. "</FrictionWeight><ElasticityWeight>" .. raw.ElasticityWeight .. "</ElasticityWeight>"
+			and CustomPhysics .. "<Density>" .. raw.Density .. "</Density><Friction>" .. raw.Friction .. "</Friction><Elasticity>" .. raw.Elasticity .. "</Elasticity><FrictionWeight>" .. raw.FrictionWeight .. "</FrictionWeight><ElasticityWeight>" .. raw.ElasticityWeight .. "</ElasticityWeight>"
 			or CustomPhysics
 	end,
 	-- ProtectedString = function(raw) return tostring(raw), "ProtectedString" end,
@@ -1115,6 +1115,266 @@ end
 
 local ClassList
 
+local NotScriptableFixes = { --[[
+		For more info: 
+		- https://github.com/luau/UniversalSynSaveInstance/blob/main/Tools/NotScriptable-Related/Potentially%20Missing%20Properties%20Dumper/Potentially%20Missing%20Properties%20Dumper.luau
+		- https://github.com/luau/UniversalSynSaveInstance/blob/main/Tools/NotScriptable-Related/NotScriptable%20Dumper/NotScriptable%20Dumper.py
+		]]
+	Instance = {
+		AttributesSerialize = function(instance)
+			-- * There are certain restrictions for names of attributes
+			-- https://create.roblox.com/docs/reference/engine/classes/Instance#SetAttribute
+			-- But it seems like even if those are present, Studio still opens the file just fine
+			-- So there is no need to check for them currently
+
+			-- TODO: merge sequence Descriptors and some other descriptors where possible (check xml descriptors)
+			-- ? Return early for empty tags (this proved equally as fast when done using counter/next)
+
+			local attrs = instance:GetAttributes()
+
+			if not next(attrs) then
+				return ""
+			end
+
+			local attrs_n = 0
+			local buffer_size = 4
+			local attrs_sorted = {}
+			local attrs_formatted = table.clone(attrs)
+			for attr, val in attrs do -- attr: string, val: any
+				attrs_n += 1
+				attrs_sorted[attrs_n] = attr
+
+				local Type = typeof(val)
+
+				local Descriptor = Binary_Descriptors[Type]
+				local attr_size
+
+				attrs_formatted[attr], attr_size = Descriptor(val)
+
+				buffer_size += (5 + #attr + attr_size) -- 5 + #(length of attribute name) + binary size(?)
+			end
+
+			table.sort(attrs_sorted)
+
+			local b = buffer.create(buffer_size)
+
+			local offset = 0
+
+			buffer.writeu32(b, offset, attrs_n)
+			offset += 4
+
+			local string__descriptor = Binary_Descriptors.string
+			for _, attr in attrs_sorted do
+				local b_Name, Name_size = string__descriptor(attr)
+
+				buffer.copy(b, offset, b_Name)
+				offset += Name_size
+
+				buffer.writeu8(b, offset, attr_Type_IDs[typeof(attrs[attr])])
+				offset += 1
+
+				local bb = attrs_formatted[attr]
+
+				buffer.copy(b, offset, bb)
+				offset += buffer.len(bb)
+			end
+
+			return buffer.tostring(b)
+		end,
+		DefinesCapabilities = "Sandboxed",
+		Tags = function(instance)
+			-- https://github.com/RobloxAPI/spec/blob/master/properties/Tags.md
+
+			local tags = instance:GetTags()
+
+			if #tags == 0 then
+				return ""
+			end
+
+			return table.concat(tags, "\0")
+		end,
+	},
+
+	-- DebuggerBreakpoint = {line="Line"}, -- ? This shouldn't appear in live games (try to prove this wrong)
+	BallSocketConstraint = { MaxFrictionTorqueXml = "MaxFrictionTorque" },
+	BasePart = {
+		Color3uint8 = "Color",
+		MaterialVariantSerialized = "MaterialVariant",
+		size = "Size",
+	},
+	DoubleConstrainedValue = { value = "Value" },
+	IntConstrainedValue = { value = "Value" },
+
+	-- CustomEvent = {PersistedCurrentValue=function(instance) -- * Class is Deprecated and :SetValue doesn't seem to affect GetCurrentValue anymore
+	-- 	local Receiver  = instance:GetAttachedReceivers()[1]
+	-- 	if Receiver then
+	-- 		return Receiver:GetCurrentValue()
+	-- 	else
+	-- 		error("No Receiver", 2)
+	-- 	end
+	-- end},
+	Terrain = {
+		AcquisitionMethod = "LastUsedModificationMethod", -- ? Not sure
+		MaterialColors = function(instance) -- https://github.com/RobloxAPI/spec/blob/master/properties/MaterialColors.md
+			local TERRAIN_MATERIAL_COLORS =
+				{ --https://github.com/rojo-rbx/rbx-dom/blob/master/rbx_dom_lua/src/customProperties.lua#L5
+					Enum.Material.Grass,
+					Enum.Material.Slate,
+					Enum.Material.Concrete,
+					Enum.Material.Brick,
+					Enum.Material.Sand,
+					Enum.Material.WoodPlanks,
+					Enum.Material.Rock,
+					Enum.Material.Glacier,
+					Enum.Material.Snow,
+					Enum.Material.Sandstone,
+					Enum.Material.Mud,
+					Enum.Material.Basalt,
+					Enum.Material.Ground,
+					Enum.Material.CrackedLava,
+					Enum.Material.Asphalt,
+					Enum.Material.Cobblestone,
+					Enum.Material.Ice,
+					Enum.Material.LeafyGrass,
+					Enum.Material.Salt,
+					Enum.Material.Limestone,
+					Enum.Material.Pavement,
+				}
+
+			local b = buffer.create(69) -- 69 bytes: 6 reserved + 63 for colors (21 materials * 3 components)
+			local offset = 6 -- 6 reserved bytes
+
+			local RGB_components = { "R", "G", "B" }
+
+			for _, material in TERRAIN_MATERIAL_COLORS do
+				local color = instance:GetMaterialColor(material)
+				for _, component in RGB_components do
+					buffer.writeu8(b, offset, math.floor(color[component] * 255)) -- ? math.floor seems unneeded but it makes it faster
+					offset += 1
+				end
+			end
+
+			return buffer.tostring(b)
+		end,
+	},
+	TriangleMeshPart = {
+		FluidFidelityInternal = "FluidFidelity",
+	},
+	MeshPart = { InitialSize = "MeshSize" },
+	PartOperation = { InitialSize = "MeshSize" },
+	Part = { shape = "Shape" },
+	TrussPart = { style = "Style" },
+	FormFactorPart = {
+		formFactorRaw = "FormFactor",
+	},
+	Fire = { heat_xml = "Heat", size_xml = "Size" },
+	Humanoid = { Health_XML = "Health" },
+	HumanoidDescription = {
+		EmotesDataInternal = function(instance)
+			local emotes_data = ""
+			for name, ids in instance:GetEmotes() do
+				emotes_data ..= name .. "^" .. table.concat(ids, "^") .. "^\\"
+			end
+			return emotes_data
+		end,
+		EquippedEmotesDataInternal = function(instance)
+			local equipped_emotes_data = ""
+			for _, emote in instance:GetEquippedEmotes() do
+				equipped_emotes_data ..= emote.Slot .. "^" .. emote.Name .. "\\"
+			end
+			return equipped_emotes_data
+		end,
+	},
+	LocalizationTable = {
+		Contents = function(instance)
+			return instance:GetContents() --service.HttpService:JSONEncode(instance:GetEntries())
+		end,
+	},
+	MaterialService = { Use2022MaterialsXml = "Use2022Materials" },
+
+	Model = {
+		ScaleFactor = function(instance)
+			return instance:GetScale()
+		end,
+		WorldPivotData = "WorldPivot", -- TODO This doesn't accurately represent whether optional type property is present or not (it's never nil), gethiddenproperty or gethiddenproperty_fallback is preferred
+	},
+	PackageLink = { PackageIdSerialize = "PackageId", VersionIdSerialize = "VersionNumber" },
+	Players = { MaxPlayersInternal = "MaxPlayers", PreferredPlayersInternal = "PreferredPlayers" }, -- ? Only needed for execs that lack LocalUserSecurity (Level 2, 5, 9), even so, it's a pretty useless information as it can be viewed elsewhere
+
+	StarterPlayer = { AvatarJointUpgrade_Serialized = "AvatarJointUpgrade" },
+	Smoke = { size_xml = "Size", opacity_xml = "Opacity", riseVelocity_xml = "RiseVelocity" },
+	Sound = {
+		xmlRead_MaxDistance_3 = "RollOffMaxDistance", -- * Also MaxDistance
+	},
+	-- ViewportFrame = { -- * Pointless because these reflect CurrentCamera's properties
+	-- 	CameraCFrame = function(instance) -- *
+	-- 		local CurrentCamera = instance.CurrentCamera
+	-- 		if CurrentCamera then
+	-- 			return CurrentCamera.CFrame
+	-- 		else
+	-- 			error("No CurrentCamera", 2)
+	-- 		end
+	-- 	end,
+	-- 	-- CameraFieldOfView =
+	-- },
+	WeldConstraint = {
+		Part0Internal = "Part0",
+		Part1Internal = "Part1",
+		-- State = function(instance)
+		-- 	-- If untouched then default state is 3 (default true)
+		-- 	return instance.Enabled and 1 or 0
+		-- end,
+	},
+	Workspace = {
+		-- SignalBehavior2 = "SignalBehavior", -- * Both are NotScriptable so it doesn't make sense to keep
+		CollisionGroupData = function()
+			local collision_groups = game:GetService("PhysicsService"):GetRegisteredCollisionGroups()
+
+			local col_groups_n = #collision_groups
+
+			if col_groups_n == 0 then
+				return "\1\0"
+			end
+
+			local buffer_size = 2 -- Initial size
+
+			for _, group in collision_groups do
+				buffer_size += 7 + #group.name
+			end
+
+			local b = buffer.create(buffer_size)
+
+			local offset = 0
+
+			buffer.writeu8(b, offset, 1) -- ? [CONSTANT] Version byte (likely)
+			offset += 1
+			buffer.writeu8(b, offset, col_groups_n) -- Group count
+			offset += 1
+
+			for i, group in collision_groups do
+				local name, id, mask = group.name, i - 1, group.mask
+				local name_len = #name
+
+				buffer.writeu8(b, offset, id) -- ID
+				offset += 1
+
+				buffer.writeu8(b, offset, 4) -- ? [CONSTANT] Not sure what this is (also not sure about u8, could be i8)
+				offset += 1
+
+				buffer.writei32(b, offset, mask) -- Mask value as signed 32-bit integer
+				offset += 4
+
+				buffer.writeu8(b, offset, name_len) -- Name length
+				offset += 1
+				buffer.writestring(b, offset, name) -- Name
+				offset += name_len
+			end
+
+			return buffer.tostring(b)
+		end,
+	},
+}
+
 do
 	local ClassPropertyExceptions = {
 		Whitelist = { TriangleMeshPart = ArrayToDict({ "CollisionFidelity" }) },
@@ -1124,273 +1384,13 @@ do
 		},
 	}
 
-	local NotScriptableFixes = { --[[
-		For more info: 
-		- https://github.com/luau/UniversalSynSaveInstance/blob/main/Tools/NotScriptable-Related/Potentially%20Missing%20Properties%20Dumper/Potentially%20Missing%20Properties%20Dumper.luau
-		- https://github.com/luau/UniversalSynSaveInstance/blob/main/Tools/NotScriptable-Related/NotScriptable%20Dumper/NotScriptable%20Dumper.py
-		]]
-		Instance = {
-			AttributesSerialize = function(instance)
-				-- * There are certain restrictions for names of attributes
-				-- https://create.roblox.com/docs/reference/engine/classes/Instance#SetAttribute
-				-- But it seems like even if those are present, Studio still opens the file just fine
-				-- So there is no need to check for them currently
-
-				-- TODO: merge sequence Descriptors and some other descriptors where possible (check xml descriptors)
-				-- ? Return early for empty tags (this proved equally as fast when done using counter/next)
-
-				local attrs = instance:GetAttributes()
-
-				if not next(attrs) then
-					return ""
-				end
-
-				local attrs_n = 0
-				local buffer_size = 4
-				local attrs_sorted = {}
-				local attrs_formatted = table.clone(attrs)
-				for attr, val in attrs do
-					attrs_n += 1
-					attrs_sorted[attrs_n] = attr
-
-					local Type = typeof(val)
-
-					local Descriptor = Binary_Descriptors[Type]
-					local attr_size
-
-					attrs_formatted[attr], attr_size = Descriptor(val)
-
-					buffer_size += 5 + #attr + attr_size
-				end
-
-				table.sort(attrs_sorted)
-
-				local b = buffer.create(buffer_size)
-
-				local offset = 0
-
-				buffer.writeu32(b, offset, attrs_n)
-				offset += 4
-
-				local string__descriptor = Binary_Descriptors.string
-				for _, attr in attrs_sorted do
-					local b_Name, Name_size = string__descriptor(attr)
-
-					buffer.copy(b, offset, b_Name)
-					offset += Name_size
-
-					buffer.writeu8(b, offset, attr_Type_IDs[typeof(attrs[attr])])
-					offset += 1
-
-					local bb = attrs_formatted[attr]
-
-					buffer.copy(b, offset, bb)
-					offset += buffer.len(bb)
-				end
-
-				return buffer.tostring(b)
-			end,
-			DefinesCapabilities = "Sandboxed",
-			Tags = function(instance)
-				-- https://github.com/RobloxAPI/spec/blob/master/properties/Tags.md
-
-				local tags = instance:GetTags()
-
-				if #tags == 0 then
-					return ""
-				end
-
-				return table.concat(tags, "\0")
-			end,
-		},
-
-		-- DebuggerBreakpoint = {line="Line"}, -- ? This shouldn't appear in live games (try to prove this wrong)
-		BallSocketConstraint = { MaxFrictionTorqueXml = "MaxFrictionTorque" },
-		BasePart = {
-			Color3uint8 = "Color",
-			MaterialVariantSerialized = "MaterialVariant",
-			size = "Size",
-		},
-		DoubleConstrainedValue = { value = "Value" },
-		IntConstrainedValue = { value = "Value" },
-
-		-- CustomEvent = {PersistedCurrentValue=function(instance) -- * Class is Deprecated and :SetValue doesn't seem to affect GetCurrentValue anymore
-		-- 	local Receiver  = instance:GetAttachedReceivers()[1]
-		-- 	if Receiver then
-		-- 		return Receiver:GetCurrentValue()
-		-- 	else
-		-- 		error("No Receiver", 2)
-		-- 	end
-		-- end},
-		Terrain = {
-			AcquisitionMethod = "LastUsedModificationMethod", -- ? Not sure
-			MaterialColors = function(instance) -- https://github.com/RobloxAPI/spec/blob/master/properties/MaterialColors.md
-				local TERRAIN_MATERIAL_COLORS =
-					{ --https://github.com/rojo-rbx/rbx-dom/blob/master/rbx_dom_lua/src/customProperties.lua#L5
-						Enum.Material.Grass,
-						Enum.Material.Slate,
-						Enum.Material.Concrete,
-						Enum.Material.Brick,
-						Enum.Material.Sand,
-						Enum.Material.WoodPlanks,
-						Enum.Material.Rock,
-						Enum.Material.Glacier,
-						Enum.Material.Snow,
-						Enum.Material.Sandstone,
-						Enum.Material.Mud,
-						Enum.Material.Basalt,
-						Enum.Material.Ground,
-						Enum.Material.CrackedLava,
-						Enum.Material.Asphalt,
-						Enum.Material.Cobblestone,
-						Enum.Material.Ice,
-						Enum.Material.LeafyGrass,
-						Enum.Material.Salt,
-						Enum.Material.Limestone,
-						Enum.Material.Pavement,
-					}
-
-				local b = buffer.create(69) -- 69 bytes: 6 reserved + 63 for colors (21 materials * 3 components)
-				local offset = 6 -- 6 reserved bytes
-
-				local RGB_components = { "R", "G", "B" }
-
-				for _, material in TERRAIN_MATERIAL_COLORS do
-					local color = instance:GetMaterialColor(material)
-					for _, component in RGB_components do
-						buffer.writeu8(b, offset, math.floor(color[component] * 255)) -- ? math.floor seems unneeded but it makes it faster
-						offset += 1
-					end
-				end
-
-				return buffer.tostring(b)
-			end,
-		},
-		TriangleMeshPart = {
-			FluidFidelityInternal = "FluidFidelity",
-		},
-		MeshPart = { InitialSize = "MeshSize" },
-		PartOperation = { InitialSize = "MeshSize" },
-		Part = { shape = "Shape" },
-		TrussPart = { style = "Style" },
-		FormFactorPart = {
-			formFactorRaw = "FormFactor",
-		},
-		Fire = { heat_xml = "Heat", size_xml = "Size" },
-		Humanoid = { Health_XML = "Health" },
-		HumanoidDescription = {
-			EmotesDataInternal = function(instance)
-				local emotes_data = ""
-				for name, ids in instance:GetEmotes() do
-					emotes_data ..= name .. "^" .. table.concat(ids, "^") .. "^\\"
-				end
-				return emotes_data
-			end,
-			EquippedEmotesDataInternal = function(instance)
-				local equipped_emotes_data = ""
-				for _, emote in instance:GetEquippedEmotes() do
-					equipped_emotes_data ..= emote.Slot .. "^" .. emote.Name .. "\\"
-				end
-				return equipped_emotes_data
-			end,
-		},
-		LocalizationTable = {
-			Contents = function(instance)
-				return instance:GetContents() --service.HttpService:JSONEncode(instance:GetEntries())
-			end,
-		},
-		MaterialService = { Use2022MaterialsXml = "Use2022Materials" },
-
-		Model = {
-			ScaleFactor = function(instance)
-				return instance:GetScale()
-			end,
-			WorldPivotData = "WorldPivot", -- TODO This doesn't accurately represent whether optional type property is present or not (it's never nil), gethiddenproperty or gethiddenproperty_fallback is preferred
-		},
-		PackageLink = { PackageIdSerialize = "PackageId", VersionIdSerialize = "VersionNumber" },
-		Players = { MaxPlayersInternal = "MaxPlayers", PreferredPlayersInternal = "PreferredPlayers" }, -- ? Only needed for execs that lack LocalUserSecurity (Level 2, 5, 9), even so, it's a pretty useless information as it can be viewed elsewhere
-
-		StarterPlayer = { AvatarJointUpgrade_Serialized = "AvatarJointUpgrade" },
-		Smoke = { size_xml = "Size", opacity_xml = "Opacity", riseVelocity_xml = "RiseVelocity" },
-		Sound = {
-			xmlRead_MaxDistance_3 = "RollOffMaxDistance", -- * Also MaxDistance
-		},
-		-- ViewportFrame = { -- * Pointless because these reflect CurrentCamera's properties
-		-- 	CameraCFrame = function(instance) -- *
-		-- 		local CurrentCamera = instance.CurrentCamera
-		-- 		if CurrentCamera then
-		-- 			return CurrentCamera.CFrame
-		-- 		else
-		-- 			error("No CurrentCamera", 2)
-		-- 		end
-		-- 	end,
-		-- 	-- CameraFieldOfView =
-		-- },
-		WeldConstraint = {
-			Part0Internal = "Part0",
-			Part1Internal = "Part1",
-			-- State = function(instance)
-			-- 	-- If untouched then default state is 3 (default true)
-			-- 	return instance.Enabled and 1 or 0
-			-- end,
-		},
-		Workspace = {
-			-- SignalBehavior2 = "SignalBehavior", -- * Both are NotScriptable so it doesn't make sense to keep
-			CollisionGroupData = function()
-				local collision_groups = game:GetService("PhysicsService"):GetRegisteredCollisionGroups()
-
-				local col_groups_n = #collision_groups
-
-				if col_groups_n == 0 then
-					return "\1\0"
-				end
-
-				local buffer_size = 2 -- Initial size
-
-				for _, group in collision_groups do
-					buffer_size += 7 + #group.name
-				end
-
-				local b = buffer.create(buffer_size)
-
-				local offset = 0
-
-				buffer.writeu8(b, offset, 1) -- ? [CONSTANT] Version byte (likely)
-				offset += 1
-				buffer.writeu8(b, offset, col_groups_n) -- Group count
-				offset += 1
-
-				for i, group in collision_groups do
-					local name, id, mask = group.name, i - 1, group.mask
-					local name_len = #name
-
-					buffer.writeu8(b, offset, id) -- ID
-					offset += 1
-
-					buffer.writeu8(b, offset, 4) -- ? [CONSTANT] Not sure what this is (also not sure about u8, could be i8)
-					offset += 1
-
-					buffer.writei32(b, offset, mask) -- Mask value as signed 32-bit integer
-					offset += 4
-
-					buffer.writeu8(b, offset, name_len) -- Name length
-					offset += 1
-					buffer.writestring(b, offset, name) -- Name
-					offset += name_len
-				end
-
-				return buffer.tostring(b)
-			end,
-		},
-	}
-
 	local function FetchAPI()
 		-- Credits @MaximumADHD
 
 		local API_Dump
 
 		local ok, err = pcall(function()
-			if EXECUTOR_NAME == "Zenith" or EXECUTOR_NAME == "Velocity" then -- TODO Temp fix as it crashes on HttpGet for sites that return 403 code
+			if EXECUTOR_NAME == "Zenith" or EXECUTOR_NAME == "Velocity" then -- TODO Temp fix as it crashes on game:HttpGet for sites that return 403 code
 				return
 			end
 
@@ -1430,7 +1430,7 @@ do
 
 			for version_hash in matching_versions do
 				ok, result = pcall(
-					game.HttpGet,
+					game.game:HttpGet,
 					game,
 					"https://setup.rbxcdn.com/" .. version_hash .. "-Full-API-Dump.json",
 					true
@@ -1930,9 +1930,9 @@ local function synsaveinstance(CustomOptions, CustomOptions2)
 
 	local DecompileIgnore, IgnoreList, IgnoreProperties, NotCreatableFixes =
 		ArrayToDict(OPTIONS.DecompileIgnore, true),
-		ArrayToDict(OPTIONS.IgnoreList, true),
-		ArrayToDict(OPTIONS.IgnoreProperties),
-		ArrayToDict(OPTIONS.NotCreatableFixes, true, "Folder")
+	ArrayToDict(OPTIONS.IgnoreList, true),
+	ArrayToDict(OPTIONS.IgnoreProperties),
+	ArrayToDict(OPTIONS.NotCreatableFixes, true, "Folder")
 
 	local __DEBUG_MODE = OPTIONS.__DEBUG_MODE
 
@@ -2033,7 +2033,7 @@ local function synsaveinstance(CustomOptions, CustomOptions2)
 		if IsModel then
 			placename = (
 				FilePath
-				or sanitizeFileName("model " .. PlaceName .. " " .. (ToSaveInstance or tmp[1] or game):GetFullName())
+					or sanitizeFileName("model " .. PlaceName .. " " .. (ToSaveInstance or tmp[1] or game):GetFullName())
 			) .. ".rbxmx"
 		else
 			placename = (FilePath or sanitizeFileName("place " .. PlaceName)) .. ".rbxlx"
@@ -2373,7 +2373,7 @@ local function synsaveinstance(CustomOptions, CustomOptions2)
 		return result == nil
 			or result == "can't get value"
 			or type(result) == "string"
-				and (category == "Enum" or string_find(result, "Unable to get property " .. propertyName))
+			and (category == "Enum" or string_find(result, "Unable to get property " .. propertyName))
 	end
 
 	local __BREAK = "__BREAK" .. service.HttpService:GenerateGUID(false)
@@ -2731,7 +2731,7 @@ local function synsaveinstance(CustomOptions, CustomOptions2)
 										Fix
 										and (
 											PropertyName == "PlayerToHideFrom"
-											or ValueType ~= "Instance" and ValueType ~= Fix
+												or ValueType ~= "Instance" and ValueType ~= Fix
 										)
 									then
 										-- * To avoid errors
@@ -2823,8 +2823,8 @@ local function synsaveinstance(CustomOptions, CustomOptions2)
 											if
 												isLocalScript and instance.RunContext == Enum.RunContext.Server
 												or not isLocalScript
-													and instance:IsA("Script")
-													and instance.RunContext ~= Enum.RunContext.Client
+												and instance:IsA("Script")
+												and instance.RunContext ~= Enum.RunContext.Client
 											then
 												value = "-- [FilteringEnabled] Server Scripts are IMPOSSIBLE to save" -- TODO: Could be not just server scripts in the future
 											else
@@ -2855,7 +2855,7 @@ local function synsaveinstance(CustomOptions, CustomOptions2)
 											-- * It can be empty, because it's optional
 											-- ? Though why even save it if it's empty considering it's optional
 											continue
-										-- value, tag = "", ValueType
+											-- value, tag = "", ValueType
 										else
 											value, tag = ReturnValueAndTag(raw, ValueType, Descriptor)
 										end
@@ -2897,12 +2897,21 @@ local function synsaveinstance(CustomOptions, CustomOptions2)
 		end
 	end
 
+	-- name: string, hierachy = { Instance }, className: string, source: string (code to be executed)
 	local function save_extra(name, hierarchy, customClassName, source)
+		local sourcePath = #hierarchy > 0 and hierarchy[1].Parent -- this sucks
+		local serializeAttributes = NotScriptableFixes.Instance.AttributesSerialize
+
 		savebuffer[savebuffer_size] = save_specific((customClassName or "Folder"), { Name = name, Source = source })
 		savebuffer_size += 1
+
 		if hierarchy then
 			save_hierarchy(hierarchy)
 		end
+
+		local customAttributes = serializeAttributes(source)
+		print(customAttributes)
+
 		savebuffer[savebuffer_size] = "</Item>"
 		savebuffer_size += 1
 	end
@@ -3001,7 +3010,7 @@ local function synsaveinstance(CustomOptions, CustomOptions2)
 				"--[[\n"
 					.. (#RecoveredScripts ~= 0 and "\t\tIMPORTANT: Original Source of these Scripts was Recovered: " .. service.HttpService:JSONEncode(
 						RecoveredScripts
-					) .. "\n" or "")
+						) .. "\n" or "")
 					.. [[
 		Thank you for using UniversalSynSaveInstance (Join to Copy Games) https://discord.gg/wx4ThpAsmw.
 
@@ -3330,8 +3339,8 @@ local function synsaveinstance(CustomOptions, CustomOptions2)
 				if getconnections then
 					for _, c in getconnections(Idled) do
 						if not pcall(function()
-							c:Disable()
-						end) then
+								c:Disable()
+							end) then
 							pcall(function()
 								c:Disconnect()
 							end)
